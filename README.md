@@ -1,5 +1,28 @@
+# About
+This project is built on top of the Wi-Fi Station Example. Its readme follows (using idf commands).  
+Using the vscode extension, the command palette can be used
+
+# Prepare
+[ESP IDF for VSCODE, will also install ESP IDF](https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/installation.html)
+
 | Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-P4 | ESP32-S2 | ESP32-S3 | ESP32-S31 |
 | ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | -------- | -------- | -------- | --------- |
+
+## Connect device
+Command palette > ESP-IDF: Select Port to use  
+
+## Setup wireless
+Command palette > ESP-IDF: SDK configuration editor (menuconfig) > Example configuration
+
+# Build
+Command palette > ESP-IDF: Build your Project
+
+# Flash
+Command palette > ESP-IDF: Flash your Project
+
+# Test
+http://192.168.1.100/open
+http://192.168.1.100/close
 
 # Wi-Fi Station Example
 

@@ -19,6 +19,9 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include <esp_http_server.h>
+#include "driver/gpio.h"
+
 /* The examples use WiFi configuration that you can set via project configuration menu
 
    If you'd rather not, just change the below entries to strings with
@@ -56,6 +59,16 @@
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WAPI_PSK
 #endif
 
+/*
+ GPIO
+*/
+
+static const gpio_num_t LED = GPIO_NUM_2;
+
+/*
+ WIFI
+*/
+
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
 
@@ -92,14 +105,33 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-void wifi_init_sta(void)
+int wifi_init_sta(void)
 {
     s_wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    // 1. Create the default station interface and capture the pointer
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+
+    // 2. Stop the DHCP client
+    ESP_ERROR_CHECK(esp_netif_dhcpc_stop(sta_netif));
+
+    // 3. Define the static IP, Gateway, and Netmask
+    esp_netif_ip_info_t ip_info;
+    esp_netif_set_ip4_addr(&ip_info.ip, 192, 168, 1, 100);      // Set desired IP
+    esp_netif_set_ip4_addr(&ip_info.gw, 192, 168, 1, 1);        // Set Gateway
+    esp_netif_set_ip4_addr(&ip_info.netmask, 255, 255, 255, 0); // Set Netmask
+
+    // 4. Apply the static IP configuration to the interface
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(sta_netif, &ip_info));
+    
+    // 5. (Optional) Set a primary DNS server if you need internet access
+    esp_netif_dns_info_t dns_info;
+    esp_netif_set_ip4_addr(&dns_info.ip.u_addr.ip4, 8, 8, 8, 8); // Google DNS
+    dns_info.ip.type = ESP_IPADDR_TYPE_V4;
+    ESP_ERROR_CHECK(esp_netif_set_dns_info(sta_netif, ESP_NETIF_DNS_MAIN, &dns_info));
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -154,16 +186,86 @@ void wifi_init_sta(void)
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+        return true;
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+        return false;
     } else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
+        return false;
     }
+}
+
+/*
+ SERVER
+*/
+
+/* HTTP GET handler for /open */
+static esp_err_t open_get_handler(httpd_req_t *req)
+{
+    gpio_set_level(LED, 1);
+    const char* resp_str = "Action: OPEN triggered!";
+    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+    ESP_LOGI(TAG, "/open endpoint hit");
+    
+    // TODO: Add your GPIO/hardware logic for "open" here
+    
+    return ESP_OK;
+}
+
+static const httpd_uri_t open_uri = {
+    .uri       = "/open",
+    .method    = HTTP_GET,
+    .handler   = open_get_handler,
+    .user_ctx  = NULL
+};
+
+/* HTTP GET handler for /close */
+static esp_err_t close_get_handler(httpd_req_t *req)
+{
+    gpio_set_level(LED, 0);
+    const char* resp_str = "Action: CLOSE triggered!";
+    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+    ESP_LOGI(TAG, "/close endpoint hit");
+    
+    // TODO: Add your GPIO/hardware logic for "close" here
+
+    return ESP_OK;
+}
+
+static const httpd_uri_t close_uri = {
+    .uri       = "/close",
+    .method    = HTTP_GET,
+    .handler   = close_get_handler,
+    .user_ctx  = NULL
+};
+
+/* Function to start the web server */
+static httpd_handle_t start_webserver(void)
+{
+    httpd_handle_t server = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
+    
+    if (httpd_start(&server, &config) == ESP_OK) {
+        ESP_LOGI(TAG, "Registering URI handlers");
+        httpd_register_uri_handler(server, &open_uri);
+        httpd_register_uri_handler(server, &close_uri);
+        return server;
+    }
+
+    ESP_LOGI(TAG, "Error starting server!");
+    return NULL;
 }
 
 void app_main(void)
 {
+    gpio_reset_pin(LED);
+    gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED, 0);
+
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -179,5 +281,8 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-    wifi_init_sta();
+    if (wifi_init_sta())
+    {
+        start_webserver();
+    }
 }

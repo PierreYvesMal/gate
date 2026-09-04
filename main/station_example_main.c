@@ -21,6 +21,7 @@
 
 #include <esp_http_server.h>
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 
 /* The examples use WiFi configuration that you can set via project configuration menu
 
@@ -65,6 +66,29 @@
 
 static const gpio_num_t LED = GPIO_NUM_2;
 
+static const gpio_num_t TB6612_PWMA = GPIO_NUM_22;
+static const gpio_num_t TB6612_AIN2 = GPIO_NUM_23;
+static const gpio_num_t TB6612_AIN1 = GPIO_NUM_21;
+static const gpio_num_t TB6612_STBY = GPIO_NUM_19;
+
+#define TB6612_PWM_FREQUENCY_HZ 20000
+#define TB6612_PWM_RESOLUTION  LEDC_TIMER_10_BIT //1024 = 100%
+#define TB6612_PWM_TIMER       LEDC_TIMER_0
+#define TB6612_PWM_CHANNEL     LEDC_CHANNEL_0
+
+static const int TB6612_PWM_DUTY_PERCENT = 100;
+
+static uint32_t tb6612_duty_from_percent(int percent)
+{
+    if (percent < 0) {
+        percent = 0;
+    } else if (percent > 100) {
+        percent = 100;
+    }
+    uint32_t val = (uint32_t)percent * ((1U << TB6612_PWM_RESOLUTION) - 1U) / 100U;
+    ESP_LOGI("MOTOR","pwm duty cycle: %d -> %ul", TB6612_PWM_DUTY_PERCENT, val);
+    return val;
+}
 /*
  WIFI
 */
@@ -81,6 +105,42 @@ static EventGroupHandle_t s_wifi_event_group;
 static const char *TAG = "wifi station";
 
 static int s_retry_num = 0;
+
+static void tb6612_gpio_init(void)
+{
+    gpio_num_t output_gpios[] = {TB6612_AIN1, TB6612_AIN2, TB6612_STBY};
+    gpio_config_t output_config = {
+        .pin_bit_mask = (1ULL << TB6612_AIN1) | (1ULL << TB6612_AIN2) | (1ULL << TB6612_STBY),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&output_config));
+    for (size_t index = 0; index < sizeof(output_gpios) / sizeof(output_gpios[0]); index++) {
+        ESP_ERROR_CHECK(gpio_set_level(output_gpios[index], 0));
+    }
+
+    ledc_timer_config_t pwm_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = TB6612_PWM_TIMER,
+        .duty_resolution = TB6612_PWM_RESOLUTION,
+        .freq_hz = TB6612_PWM_FREQUENCY_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&pwm_timer));
+
+    ledc_channel_config_t pwm_channel = {
+        .gpio_num = TB6612_PWMA,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = TB6612_PWM_CHANNEL,
+        .timer_sel = TB6612_PWM_TIMER,
+        .duty = tb6612_duty_from_percent(TB6612_PWM_DUTY_PERCENT),
+        .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&pwm_channel));
+}
 
 
 static void event_handler(void* arg, esp_event_base_t event_base,
@@ -205,12 +265,13 @@ int wifi_init_sta(void)
 static esp_err_t open_get_handler(httpd_req_t *req)
 {
     gpio_set_level(LED, 1);
+    gpio_set_level(TB6612_AIN1, 1);
+    gpio_set_level(TB6612_AIN2, 0);
+    gpio_set_level(TB6612_STBY, 1);
     const char* resp_str = "Action: OPEN triggered!";
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     ESP_LOGI(TAG, "/open endpoint hit");
-    
-    // TODO: Add your GPIO/hardware logic for "open" here
-    
+
     return ESP_OK;
 }
 
@@ -225,11 +286,12 @@ static const httpd_uri_t open_uri = {
 static esp_err_t close_get_handler(httpd_req_t *req)
 {
     gpio_set_level(LED, 0);
+    gpio_set_level(TB6612_AIN1, 0);
+    gpio_set_level(TB6612_AIN2, 1);
+    gpio_set_level(TB6612_STBY, 1);
     const char* resp_str = "Action: CLOSE triggered!";
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     ESP_LOGI(TAG, "/close endpoint hit");
-    
-    // TODO: Add your GPIO/hardware logic for "close" here
 
     return ESP_OK;
 }
@@ -265,6 +327,8 @@ void app_main(void)
     gpio_reset_pin(LED);
     gpio_set_direction(LED, GPIO_MODE_OUTPUT);
     gpio_set_level(LED, 0);
+    ESP_LOGI(TAG, "Initializing gpios");
+    tb6612_gpio_init();
 
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();

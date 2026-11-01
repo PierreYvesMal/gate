@@ -23,7 +23,7 @@
     "board/esp32-wrover-kit-3.3v.cfg"
   ],
   "idf.port": "/dev/ttyUSB0",
-  "idf.currentSetup": "/home/py/.espressif/release-v6.1/esp-idf",
+  "idf.currentSetup": "/home/py/.espressif/v6.1/esp-idf",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },
@@ -33,5 +33,6 @@
     "--query-driver=**",
     "--compile-commands-dir=/home/py/station/build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.monitorPort": "/dev/ttyUSB0"
 }

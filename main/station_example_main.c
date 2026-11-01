@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/timers.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -71,12 +72,36 @@ static const gpio_num_t TB6612_AIN2 = GPIO_NUM_23;
 static const gpio_num_t TB6612_AIN1 = GPIO_NUM_21;
 static const gpio_num_t TB6612_STBY = GPIO_NUM_19;
 
+static const char *TAG = "wifi station";
+
 #define TB6612_PWM_FREQUENCY_HZ 20000
-#define TB6612_PWM_RESOLUTION  LEDC_TIMER_10_BIT //1024 = 100%
-#define TB6612_PWM_TIMER       LEDC_TIMER_0
-#define TB6612_PWM_CHANNEL     LEDC_CHANNEL_0
+#define TB6612_PWM_RESOLUTION   LEDC_TIMER_10_BIT //1024 = 100%
+#define TB6612_PWM_TIMER        LEDC_TIMER_0
+#define TB6612_PWM_CHANNEL      LEDC_CHANNEL_0
+#define OPENING_TIME_SEC        10
 
 static const int TB6612_PWM_DUTY_PERCENT = 100;
+static TimerHandle_t s_motor_stop_timer;
+
+static void tb6612_stop_timer_callback(TimerHandle_t timer)
+{
+    (void)timer;
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, 0));
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, 0));
+}
+
+static esp_err_t tb6612_start_motion(int ain1_level, int ain2_level)
+{
+    if (xTimerReset(s_motor_stop_timer, 0) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start motor stop timer");
+        return ESP_FAIL;
+    }
+
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, ain1_level));
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, ain2_level));
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_STBY, 1));
+    return ESP_OK;
+}
 
 static uint32_t tb6612_duty_from_percent(int percent)
 {
@@ -101,8 +126,6 @@ static EventGroupHandle_t s_wifi_event_group;
  * - we failed to connect after the maximum amount of retries */
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
-
-static const char *TAG = "wifi station";
 
 static int s_retry_num = 0;
 
@@ -180,8 +203,8 @@ int wifi_init_sta(void)
 
     // 3. Define the static IP, Gateway, and Netmask
     esp_netif_ip_info_t ip_info;
-    esp_netif_set_ip4_addr(&ip_info.ip, 192, 168, 1, 100);      // Set desired IP
-    esp_netif_set_ip4_addr(&ip_info.gw, 192, 168, 1, 1);        // Set Gateway
+    esp_netif_set_ip4_addr(&ip_info.ip, 192, 168, 0, 100);      // Set desired IP
+    esp_netif_set_ip4_addr(&ip_info.gw, 192, 168, 0, 1);        // Set Gateway
     esp_netif_set_ip4_addr(&ip_info.netmask, 255, 255, 255, 0); // Set Netmask
 
     // 4. Apply the static IP configuration to the interface
@@ -264,10 +287,11 @@ int wifi_init_sta(void)
 /* HTTP GET handler for /open */
 static esp_err_t open_get_handler(httpd_req_t *req)
 {
+    if (tb6612_start_motion(1, 0) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start motor timer");
+        return ESP_FAIL;
+    }
     gpio_set_level(LED, 1);
-    gpio_set_level(TB6612_AIN1, 1);
-    gpio_set_level(TB6612_AIN2, 0);
-    gpio_set_level(TB6612_STBY, 1);
     const char* resp_str = "Action: OPEN triggered!";
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     ESP_LOGI(TAG, "/open endpoint hit");
@@ -285,10 +309,11 @@ static const httpd_uri_t open_uri = {
 /* HTTP GET handler for /close */
 static esp_err_t close_get_handler(httpd_req_t *req)
 {
+    if (tb6612_start_motion(0, 1) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start motor timer");
+        return ESP_FAIL;
+    }
     gpio_set_level(LED, 0);
-    gpio_set_level(TB6612_AIN1, 0);
-    gpio_set_level(TB6612_AIN2, 1);
-    gpio_set_level(TB6612_STBY, 1);
     const char* resp_str = "Action: CLOSE triggered!";
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     ESP_LOGI(TAG, "/close endpoint hit");
@@ -329,6 +354,16 @@ void app_main(void)
     gpio_set_level(LED, 0);
     ESP_LOGI(TAG, "Initializing gpios");
     tb6612_gpio_init();
+    s_motor_stop_timer = xTimerCreate(
+        "motor_stop",
+        pdMS_TO_TICKS(OPENING_TIME_SEC * 1000U),
+        pdFALSE,
+        NULL,
+        tb6612_stop_timer_callback);
+    if (s_motor_stop_timer == NULL) {
+        ESP_LOGE(TAG, "Failed to create motor stop timer");
+        return;
+    }
 
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();

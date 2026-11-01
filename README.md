@@ -9,6 +9,7 @@ Using the vscode extension, the command palette can be used
 | ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | -------- | -------- | -------- | --------- |
 
 ## Connect device
+Command palette > ESP-IDF: Select current idf version (if not working)  
 Command palette > ESP-IDF: Select Port to use  
 
 ## Setup wireless

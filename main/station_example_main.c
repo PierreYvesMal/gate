@@ -71,6 +71,7 @@ static const gpio_num_t TB6612_PWMA = GPIO_NUM_22;
 static const gpio_num_t TB6612_AIN2 = GPIO_NUM_23;
 static const gpio_num_t TB6612_AIN1 = GPIO_NUM_21;
 static const gpio_num_t TB6612_STBY = GPIO_NUM_19;
+static const gpio_num_t PUMP_RELAY  = GPIO_NUM_18;
 
 static const char *TAG = "wifi station";
 
@@ -78,7 +79,7 @@ static const char *TAG = "wifi station";
 #define TB6612_PWM_RESOLUTION   LEDC_TIMER_10_BIT //1024 = 100%
 #define TB6612_PWM_TIMER        LEDC_TIMER_0
 #define TB6612_PWM_CHANNEL      LEDC_CHANNEL_0
-#define OPENING_TIME_SEC        10
+#define OPENING_TIME_SEC        5
 
 static const int TB6612_PWM_DUTY_PERCENT = 100;
 static TimerHandle_t s_motor_stop_timer;
@@ -88,6 +89,7 @@ static void tb6612_stop_timer_callback(TimerHandle_t timer)
     (void)timer;
     ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, 0));
     ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, 0));
+    ESP_ERROR_CHECK(gpio_set_level(PUMP_RELAY, 0));
 }
 
 static esp_err_t tb6612_start_motion(int ain1_level, int ain2_level)
@@ -99,6 +101,7 @@ static esp_err_t tb6612_start_motion(int ain1_level, int ain2_level)
 
     ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, ain1_level));
     ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, ain2_level));
+    ESP_ERROR_CHECK(gpio_set_level(PUMP_RELAY, 1));
     ESP_ERROR_CHECK(gpio_set_level(TB6612_STBY, 1));
     return ESP_OK;
 }
@@ -131,9 +134,9 @@ static int s_retry_num = 0;
 
 static void tb6612_gpio_init(void)
 {
-    gpio_num_t output_gpios[] = {TB6612_AIN1, TB6612_AIN2, TB6612_STBY};
+    gpio_num_t output_gpios[] = {TB6612_AIN1, TB6612_AIN2, TB6612_STBY, PUMP_RELAY};
     gpio_config_t output_config = {
-        .pin_bit_mask = (1ULL << TB6612_AIN1) | (1ULL << TB6612_AIN2) | (1ULL << TB6612_STBY),
+        .pin_bit_mask = (1ULL << TB6612_AIN1) | (1ULL << TB6612_AIN2) | (1ULL << TB6612_STBY) | (1ULL << PUMP_RELAY),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,

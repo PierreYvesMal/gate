@@ -79,17 +79,39 @@ static const char *TAG = "wifi station";
 #define TB6612_PWM_RESOLUTION   LEDC_TIMER_10_BIT //1024 = 100%
 #define TB6612_PWM_TIMER        LEDC_TIMER_0
 #define TB6612_PWM_CHANNEL      LEDC_CHANNEL_0
-#define OPENING_TIME_SEC        5
+#define OPENING_TIME_SEC        15
+#define SIGNAL_DELAY_USEC       1000000
 
 static const int TB6612_PWM_DUTY_PERCENT = 100;
 static TimerHandle_t s_motor_stop_timer;
 
+enum State
+{
+    IDLE = 0,
+    OPENING,
+    CLOSING
+};
+
+static enum State state = IDLE;
+
+static void tb6612_stop_motion()
+{
+    ESP_ERROR_CHECK(gpio_set_level(PUMP_RELAY, 0));
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, 0));
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, 0));
+    state = IDLE;
+}
+
 static void tb6612_stop_timer_callback(TimerHandle_t timer)
 {
     (void)timer;
-    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, 0));
-    ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, 0));
-    ESP_ERROR_CHECK(gpio_set_level(PUMP_RELAY, 0));
+    tb6612_stop_motion();
 }
 
 static esp_err_t tb6612_start_motion(int ain1_level, int ain2_level)
@@ -98,11 +120,13 @@ static esp_err_t tb6612_start_motion(int ain1_level, int ain2_level)
         ESP_LOGE(TAG, "Failed to start motor stop timer");
         return ESP_FAIL;
     }
-
     ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN1, ain1_level));
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
     ESP_ERROR_CHECK(gpio_set_level(TB6612_AIN2, ain2_level));
-    ESP_ERROR_CHECK(gpio_set_level(PUMP_RELAY, 1));
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
     ESP_ERROR_CHECK(gpio_set_level(TB6612_STBY, 1));
+    esp_rom_delay_us(SIGNAL_DELAY_USEC);
+    ESP_ERROR_CHECK(gpio_set_level(PUMP_RELAY, 1));
     return ESP_OK;
 }
 
@@ -290,12 +314,32 @@ int wifi_init_sta(void)
 /* HTTP GET handler for /open */
 static esp_err_t open_get_handler(httpd_req_t *req)
 {
-    if (tb6612_start_motion(1, 0) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start motor timer");
-        return ESP_FAIL;
+    const char* resp_str = NULL;
+    if(state == IDLE)
+    {
+        state = OPENING;
+        // TODO: unlock
+        gpio_set_level(LED, 1);
+        esp_rom_delay_us(SIGNAL_DELAY_USEC);
+        if (tb6612_start_motion(1, 0) != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start motor timer");
+            return ESP_FAIL;
+        }
+        resp_str = "Action: OPENING";
     }
-    gpio_set_level(LED, 1);
-    const char* resp_str = "Action: OPEN triggered!";
+    else if(state == CLOSING)
+    {
+        tb6612_stop_motion();
+        resp_str = "Action: CANCEL CLOSING";
+    }
+    else if(state == OPENING)
+    {
+        resp_str = "Already opening";
+    }
+    else
+    {
+        resp_str = "Impossible state";
+    }
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     ESP_LOGI(TAG, "/open endpoint hit");
 
@@ -312,12 +356,30 @@ static const httpd_uri_t open_uri = {
 /* HTTP GET handler for /close */
 static esp_err_t close_get_handler(httpd_req_t *req)
 {
-    if (tb6612_start_motion(0, 1) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start motor timer");
-        return ESP_FAIL;
+    const char* resp_str = NULL;
+    if(state == IDLE)
+    {
+        state = CLOSING;
+        if (tb6612_start_motion(0, 1) != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start motor timer");
+            return ESP_FAIL;
+        }
+        gpio_set_level(LED, 0);
+        resp_str = "Action: CLOSING";
     }
-    gpio_set_level(LED, 0);
-    const char* resp_str = "Action: CLOSE triggered!";
+    else if(state == OPENING)
+    {
+        tb6612_stop_motion();
+        resp_str = "Action: CANCEL OPENING";
+    }
+    else if(state == CLOSING)
+    {
+        resp_str = "Already closing";
+    }
+    else
+    {
+        resp_str = "Impossible state";
+    }
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     ESP_LOGI(TAG, "/close endpoint hit");
 
